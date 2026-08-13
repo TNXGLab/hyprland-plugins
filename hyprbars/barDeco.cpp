@@ -493,8 +493,7 @@ void CHyprBar::renderPass(PHLMONITOR pMonitor, const float& a) {
 
     const auto BARBUF = DECOBOX.size() * pMonitor->m_scale;
 
-    CBox       titleBarBox = {DECOBOX.x - pMonitor->m_position.x, DECOBOX.y - pMonitor->m_position.y, DECOBOX.w,
-                              DECOBOX.h + ROUNDING * 3 /* to fill the bottom cuz we can't disable rounding there */};
+    CBox       titleBarBox = {DECOBOX.x - pMonitor->m_position.x, DECOBOX.y - pMonitor->m_position.y, DECOBOX.w, DECOBOX.h + ROUNDING * 3};
 
     titleBarBox.translate(PWINDOW->m_floatingOffset).scale(pMonitor->m_scale).round();
 
@@ -503,51 +502,26 @@ void CHyprBar::renderPass(PHLMONITOR pMonitor, const float& a) {
 
     g_pHyprOpenGL->scissor(titleBarBox);
 
-    if (ROUNDING) {
-        // the +1 is a shit garbage temp fix until renderRect supports an alpha matte
-        CBox windowBox = {PWINDOW->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT).x + PWINDOW->m_floatingOffset.x - pMonitor->m_position.x + 1,
-                          PWINDOW->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT).y + PWINDOW->m_floatingOffset.y - pMonitor->m_position.y + 1,
-                          PWINDOW->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT).x - 2, PWINDOW->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT).y - 2};
+    const auto renderBarBackground = [&](CBox box, const int rounding) {
+        if (SHOULDBLUR)
+            g_pHyprOpenGL->renderRect(box, color, {.round = rounding, .roundingPower = m_pWindow->roundingPower(), .blur = true, .blurA = a});
+        else
+            g_pHyprOpenGL->renderRect(box, color, {.round = rounding, .roundingPower = m_pWindow->roundingPower()});
+    };
 
-        if (windowBox.w < 1 || windowBox.h < 1)
-            return;
+    renderBarBackground(titleBarBox, sc<int>(scaledRounding));
 
-        glClearStencil(0);
-        glClear(GL_STENCIL_BUFFER_BIT);
-
-        g_pHyprOpenGL->setCapStatus(GL_STENCIL_TEST, true);
-
-        glStencilFunc(GL_ALWAYS, 1, -1);
-        glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-
-        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-
-        windowBox.translate(WORKSPACEOFFSET).scale(pMonitor->m_scale).round();
-        g_pHyprOpenGL->renderRect(windowBox, CHyprColor(0, 0, 0, 0), {.round = sc<int>(scaledRounding), .roundingPower = m_pWindow->roundingPower()});
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-
-        glStencilFunc(GL_NOTEQUAL, 1, -1);
-        glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+    // 背景向窗口主体下方延伸，并由 UNDER 装饰层上的窗口内容覆盖中间部分。
+    // 这样既能填充标题栏与主体之间的内切角，也不依赖可能失效的 stencil 内容。
+    if (scaledRounding > 0) {
+        const auto fillHeight = std::min(sc<double>(scaledRounding), titleBarBox.h);
+        CBox       bottomFill = {titleBarBox.x, titleBarBox.y + titleBarBox.h - fillHeight, titleBarBox.w, fillHeight};
+        renderBarBackground(bottomFill, 0);
     }
-
-    if (SHOULDBLUR)
-        g_pHyprOpenGL->renderRect(titleBarBox, color, {.round = sc<int>(scaledRounding), .roundingPower = m_pWindow->roundingPower(), .blur = true, .blurA = a});
-    else
-        g_pHyprOpenGL->renderRect(titleBarBox, color, {.round = sc<int>(scaledRounding), .roundingPower = m_pWindow->roundingPower()});
-
     // render title
     if (ENABLETITLE && (m_szLastTitle != PWINDOW->m_title || m_bWindowSizeChanged || !m_pTextTex || m_pTextTex->m_texID == 0 || m_bTitleColorChanged)) {
         m_szLastTitle = PWINDOW->m_title;
         renderBarTitle(BARBUF, pMonitor->m_scale);
-    }
-
-    if (ROUNDING) {
-        // cleanup stencil
-        glClearStencil(0);
-        glClear(GL_STENCIL_BUFFER_BIT);
-        g_pHyprOpenGL->setCapStatus(GL_STENCIL_TEST, false);
-        glStencilMask(-1);
-        glStencilFunc(GL_ALWAYS, 1, 0xFF);
     }
 
     CBox textBox = {titleBarBox.x, titleBarBox.y, BARBUF.x, BARBUF.y};

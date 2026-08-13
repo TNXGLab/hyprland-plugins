@@ -502,21 +502,46 @@ void CHyprBar::renderPass(PHLMONITOR pMonitor, const float& a) {
 
     g_pHyprOpenGL->scissor(titleBarBox);
 
-    const auto renderBarBackground = [&](CBox box, const int rounding) {
-        if (SHOULDBLUR)
-            g_pHyprOpenGL->renderRect(box, color, {.round = rounding, .roundingPower = m_pWindow->roundingPower(), .blur = true, .blurA = a});
-        else
-            g_pHyprOpenGL->renderRect(box, color, {.round = rounding, .roundingPower = m_pWindow->roundingPower()});
+    const auto renderBarBackground = [&](CBox box, const int rounding, const bool blur) {
+        if (blur) {
+            CRegion blurDamage{g_pHyprRenderer->m_renderData.damage};
+            blurDamage.intersect(box);
+
+            if (!blurDamage.empty()) {
+                const auto blurredBackground = g_pHyprRenderer->blurMainFramebuffer(a, &blurDamage);
+                const auto monitorSize       = pMonitor->m_transformedSize;
+                const auto uvTopLeft         = Vector2D{box.x / monitorSize.x, box.y / monitorSize.y};
+                const auto uvBottomRight     = Vector2D{(box.x + box.w) / monitorSize.x, (box.y + box.h) / monitorSize.y};
+
+                g_pHyprRenderer->pushMonitorTransformEnabled(true);
+                const auto savedRenderModif               = g_pHyprRenderer->m_renderData.renderModif;
+                g_pHyprRenderer->m_renderData.renderModif = {};
+                g_pHyprOpenGL->renderTexture(blurredBackground, box,
+                                             {.damage                      = &blurDamage,
+                                              .a                           = a,
+                                              .round                       = rounding,
+                                              .roundingPower               = m_pWindow->roundingPower(),
+                                              .allowCustomUV               = true,
+                                              .allowDim                    = false,
+                                              .primarySurfaceUVTopLeft     = uvTopLeft,
+                                              .primarySurfaceUVBottomRight = uvBottomRight});
+                g_pHyprRenderer->popMonitorTransformEnabled();
+                g_pHyprRenderer->m_renderData.renderModif = savedRenderModif;
+                g_pHyprOpenGL->scissor(titleBarBox);
+            }
+        }
+
+        g_pHyprOpenGL->renderRect(box, color, {.round = rounding, .roundingPower = m_pWindow->roundingPower()});
     };
 
-    renderBarBackground(titleBarBox, sc<int>(scaledRounding));
+    renderBarBackground(titleBarBox, sc<int>(scaledRounding), SHOULDBLUR);
 
     // 背景向窗口主体下方延伸，并由 UNDER 装饰层上的窗口内容覆盖中间部分。
     // 这样既能填充标题栏与主体之间的内切角，也不依赖可能失效的 stencil 内容。
     if (scaledRounding > 0) {
         const auto fillHeight = std::min(sc<double>(scaledRounding), titleBarBox.h);
         CBox       bottomFill = {titleBarBox.x, titleBarBox.y + titleBarBox.h - fillHeight, titleBarBox.w, fillHeight};
-        renderBarBackground(bottomFill, 0);
+        renderBarBackground(bottomFill, 0, false);
     }
     // render title
     if (ENABLETITLE && (m_szLastTitle != PWINDOW->m_title || m_bWindowSizeChanged || !m_pTextTex || m_pTextTex->m_texID == 0 || m_bTitleColorChanged)) {
